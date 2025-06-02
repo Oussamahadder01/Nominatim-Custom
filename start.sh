@@ -1,10 +1,29 @@
-#!/bin/bash -ex
+#!/bin/bash -e
+
+# Production startup script for Nominatim
+# Optimized for AWS ECS deployment with EFS and RDS
 
 tailpid=0
 replicationpid=0
 GUNICORN_PID_FILE=/tmp/gunicorn.pid
-# send gunicorn logs straight to the console without buffering: https://stackoverflow.com/questions/59812009
+
+# Logging configuration
 export PYTHONUNBUFFERED=1
+LOG_FILE="/var/log/nominatim/nominatim.log"
+ERROR_LOG_FILE="/var/log/nominatim/error.log"
+
+# Create log files if they don't exist
+mkdir -p /var/log/nominatim
+touch "$LOG_FILE" "$ERROR_LOG_FILE"
+
+# Logging function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+log_error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" | tee -a "$ERROR_LOG_FILE" >&2
+}
 
 
 stopServices() {
@@ -25,18 +44,44 @@ stopServices() {
 }
 trap stopServices SIGTERM TERM INT
 
-# Create nominatim user if it doesn't exist
-if id nominatim >/dev/null 2>&1; then
-  echo "user nominatim already exists"
-else
-  useradd -m -p ${NOMINATIM_PASSWORD} nominatim
+# Validate required environment variables
+required_vars=("PGHOST" "PGPORT" "PGDATABASE" "PGUSER" "PGPASSWORD" "NOMINATIM_PASSWORD")
+for var in "${required_vars[@]}"; do
+    if [ -z "${!var}" ]; then
+        log_error "Required environment variable $var is not set"
+        exit 1
+    fi
+done
+
+log "Starting Nominatim production container..."
+log "Database: $PGUSER@$PGHOST:$PGPORT/$PGDATABASE"
+log "EFS Directory: $EFS_DIR"
+log "Project Directory: $PROJECT_DIR"
+
+# Verify EFS mount is available
+if [ ! -d "$EFS_DIR" ]; then
+    log_error "EFS directory $EFS_DIR not found. Ensure EFS is properly mounted."
+    exit 1
 fi
 
-# Create tokenizer directories and set permissions
-mkdir -p /nominatim/tokenizer
+# Test EFS write access
+if ! touch "$EFS_DIR/.write_test" 2>/dev/null; then
+    log_error "Cannot write to EFS directory $EFS_DIR. Check permissions."
+    exit 1
+fi
+rm -f "$EFS_DIR/.write_test"
+log "EFS mount verified and writable"
+
+# Create necessary directories
 mkdir -p ${PROJECT_DIR}/tokenizer
-chown -R nominatim:nominatim /nominatim/tokenizer 2>/dev/null || true
-chown -R nominatim:nominatim ${PROJECT_DIR}/tokenizer 2>/dev/null || true
+mkdir -p ${EFS_DIR}/data
+mkdir -p /var/log/nominatim
+
+# Set proper permissions (running as nominatim user)
+chown -R nominatim:nominatim ${PROJECT_DIR} 2>/dev/null || true
+chown -R nominatim:nominatim /var/log/nominatim 2>/dev/null || true
+
+log "Directory structure created and permissions set"
 
 # Fix the replication URL in the configuration file
 if [ "$REPLICATION_URL" != "" ]; then
@@ -63,39 +108,44 @@ run_as_nominatim() {
   fi
 }
 
-# Function to check if Nominatim database has been initialized properly
+# Enhanced database initialization check
 check_database_initialized() {
-  echo "Checking if database is already initialized..."
+  log "Checking database initialization status..."
   
-  # Connect to the database and check for key Nominatim tables
-  # Return 0 (true) if already initialized, 1 (false) if not
+  # Test database connectivity first
+  if ! PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE -c "SELECT 1" >/dev/null 2>&1; then
+    log_error "Cannot connect to database. Check connection parameters."
+    return 1
+  fi
+  
+  # Check for key Nominatim tables
   if ! PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE -t -c "
   SELECT EXISTS (
     SELECT FROM pg_tables 
     WHERE schemaname='public' 
     AND tablename IN ('placex', 'place', 'search_name', 'word')
   )" 2>/dev/null | grep -q 't'; then
-    echo "Database not initialized or missing required tables."
+    log "Database not initialized or missing required tables."
     return 1
   fi
   
-  echo "Database already initialized with Nominatim tables."
+  log "Database already initialized with Nominatim tables."
   
   # Check for presence of data
-  local place_count=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE -t -c "SELECT COUNT(*) FROM placex LIMIT 1" 2>/dev/null)
-  echo "Database contains approximately $place_count entries in placex table."
+  local place_count=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE -t -c "SELECT COUNT(*) FROM placex LIMIT 1" 2>/dev/null || echo "0")
+  log "Database contains approximately $place_count entries in placex table."
   
-  # Check database for integrity - but don't fail just on Wikipedia warnings
-  echo "Checking database integrity..."
-  local db_check_output=$(run_as_nominatim nominatim admin --check-database 2>&1)
+  # Check database integrity with better error handling
+  log "Checking database integrity..."
+  local db_check_output=$(run_as_nominatim nominatim admin --check-database 2>&1 || true)
   local db_check_status=$?
   
-  echo "$db_check_output"
+  log "Database check output: $db_check_output"
   
-  # Check if it's just a Wikipedia warning (which is acceptable)
+  # Accept Wikipedia warnings as non-critical
   if [ $db_check_status -ne 0 ]; then
     if echo "$db_check_output" | grep -q "Wikipedia/Wikidata importance tables missing"; then
-      echo "Only Wikipedia/Wikidata tables are missing. This is acceptable."
+      log "Only Wikipedia/Wikidata tables are missing. This is acceptable for production."
       return 0
     else
       echo "Database integrity check failed with status $db_check_status. May need repair."
@@ -115,17 +165,17 @@ DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d post
 SKIP_IMPORT=false
 
 if [ "$DB_EXISTS" -eq "1" ]; then
-  echo "Database $PGDATABASE exists, checking if it's properly initialized..."
+  log "Database $PGDATABASE exists, checking if it's properly initialized..."
   check_database_initialized
   DB_STATUS=$?
   
   if [ $DB_STATUS -eq 0 ]; then
-    echo "Skipping import as database is already properly initialized."
+    log "Skipping import as database is already properly initialized."
     SKIP_IMPORT=true
     # Make sure the import finished flag is set
     touch ${IMPORT_FINISHED}
   elif [ $DB_STATUS -eq 2 ]; then
-    echo "Database exists but needs repair. Running repair operations..."
+    log "Database exists but needs repair. Running repair operations..."
     # Run config.sh to ensure all required variables are set
     /app/config.sh || true
     
@@ -135,38 +185,52 @@ if [ "$DB_EXISTS" -eq "1" ]; then
     chown -R nominatim:nominatim ${PROJECT_DIR}/tokenizer 2>/dev/null || true
     
     # Refresh word tokens and tables
-    echo "Refreshing word tokens..."
+    log "Refreshing word tokens..."
     run_as_nominatim nominatim refresh --word-tokens || true
     
-    echo "Refreshing word counts..."
+    log "Refreshing word counts..."
     run_as_nominatim nominatim refresh --word-counts || true
     
     # Refresh functions
-    echo "Refreshing database functions..."
+    log "Refreshing database functions..."
     run_as_nominatim nominatim refresh --functions || true
     
     # Address levels
-    echo "Refreshing address levels..."
+    log "Refreshing address levels..."
     run_as_nominatim nominatim refresh --address-levels || true
     
     # Index any leftover places
-    echo "Indexing any remaining places..."
+    log "Indexing any remaining places..."
     run_as_nominatim nominatim index --threads ${THREADS:-$(nproc)} || true
     
     # Check database again
-    echo "Checking database after repairs..."
-    run_as_nominatim nominatim admin --check-database || echo "Some issues remain but continuing anyway"
+    log "Checking database after repairs..."
+    run_as_nominatim nominatim admin --check-database || log "Some issues remain but continuing anyway"
     
     # Mark as finished
     touch ${IMPORT_FINISHED}
     SKIP_IMPORT=true
   else
-    echo "Database exists but doesn't have Nominatim tables. Will proceed with import."
+    log "Database exists but doesn't have Nominatim tables. Will proceed with import."
+    
+    # Check if we have OSM data source configured
+    if [ -z "$PBF_URL" ] && [ -z "$PBF_PATH" ]; then
+      log_error "No OSM data source configured. Set PBF_URL or PBF_PATH environment variable."
+      exit 1
+    fi
+    
     # Run config.sh since we'll need to do an import
     /app/config.sh
   fi
 else
-  echo "Database doesn't exist. Will proceed with import."
+  log "Database doesn't exist. Will proceed with import."
+  
+  # Check if we have OSM data source configured
+  if [ -z "$PBF_URL" ] && [ -z "$PBF_PATH" ]; then
+    log_error "No OSM data source configured. Set PBF_URL or PBF_PATH environment variable."
+    exit 1
+  fi
+  
   # Run config.sh since we'll need to do an import
   /app/config.sh
 fi
@@ -174,16 +238,17 @@ fi
 # Only run the init.sh script if we're not skipping the import
 if [ "$SKIP_IMPORT" = "false" ]; then
   if [ ! -f ${IMPORT_FINISHED} ]; then
-    echo "Running full import with init.sh..."
+    log "Running full import with init.sh..."
     /app/init.sh
     touch ${IMPORT_FINISHED}
+    log "Database initialization completed successfully"
   else
-    echo "Import appears to be finished based on marker file, but database checks failed."
-    echo "Will skip import but this may cause issues. Consider removing ${IMPORT_FINISHED} to force reimport."
+    log "Import appears to be finished based on marker file, but database checks failed."
+    log "Will skip import but this may cause issues. Consider removing ${IMPORT_FINISHED} to force reimport."
     chown -R nominatim:nominatim ${PROJECT_DIR} 2>/dev/null || true
   fi
 else
-  echo "Import skipped. Using existing database."
+  log "Import skipped. Using existing database."
   chown -R nominatim:nominatim ${PROJECT_DIR} 2>/dev/null || true
 fi
 
@@ -252,16 +317,76 @@ echo "Warming finished"
 
 echo "--> Nominatim is ready to accept requests"
 
+# Calculate optimal worker count based on available resources
+WORKER_COUNT=${NOMINATIM_API_POOL_SIZE:-$(nproc)}
+if [ "$WORKER_COUNT" -gt 8 ]; then
+  WORKER_COUNT=8  # Cap at 8 workers for stability
+fi
+
+log "Starting Nominatim API server on port 8080 with $WORKER_COUNT workers..."
+
 # Start the Nominatim API server
 cd "$PROJECT_DIR"
 run_as_nominatim gunicorn \
-  --bind :8080 \
-  --pid $GUNICORN_PID_FILE \
-  --daemon \
-  --workers 4 \
-  --enable-stdio-inheritance \
+  --bind 0.0.0.0:8080 \
+  --workers $WORKER_COUNT \
   --worker-class uvicorn.workers.UvicornWorker \
+  --timeout ${NOMINATIM_REQUEST_TIMEOUT:-60} \
+  --keep-alive 5 \
+  --max-requests 2000 \
+  --max-requests-jitter 200 \
+  --worker-connections 1000 \
+  --preload \
+  --pid $GUNICORN_PID_FILE \
+  --access-logfile "$LOG_FILE" \
+  --error-logfile "$ERROR_LOG_FILE" \
+  --log-level info \
+  --capture-output \
+  --daemon \
+  --enable-stdio-inheritance \
   nominatim_api.server.falcon.server:run_wsgi
 
-# Keep the container running
-wait $tailpid || true
+# Health monitoring and process management
+log "Nominatim API server started successfully. Beginning health monitoring..."
+
+# Wait for server to be ready
+sleep 10
+
+# Main monitoring loop
+while true; do
+  # Check if gunicorn is still running
+  if [ -f "$GUNICORN_PID_FILE" ]; then
+    GUNICORN_PID=$(cat $GUNICORN_PID_FILE)
+    if ! kill -0 $GUNICORN_PID 2>/dev/null; then
+      log_error "Gunicorn process died unexpectedly. Exiting."
+      exit 1
+    fi
+  else
+    log_error "Gunicorn PID file not found. Server may have crashed."
+    exit 1
+  fi
+  
+  # Health check via HTTP endpoint
+  if ! curl -f -s http://localhost:8080/status >/dev/null 2>&1; then
+    log_error "Health check failed. Server not responding properly."
+    # Give it one more chance before failing
+    sleep 5
+    if ! curl -f -s http://localhost:8080/status >/dev/null 2>&1; then
+      log_error "Health check failed twice. Exiting."
+      exit 1
+    fi
+  fi
+  
+  # Check replication process if running
+  if [ $replicationpid -ne 0 ] && ! kill -0 $replicationpid 2>/dev/null; then
+    log_error "Replication process died. This may affect data freshness."
+    replicationpid=0
+  fi
+  
+  # Log status every 5 minutes
+  if [ $(($(date +%s) % 300)) -eq 0 ]; then
+    log "Health check passed. Server is running normally."
+  fi
+  
+  sleep 30
+done
