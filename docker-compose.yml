@@ -1,0 +1,39 @@
+services:
+  nominatim:
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 16G
+    container_name: nominatim
+    build:
+      context: .
+      args:
+        NOMINATIM_VERSION: 5.1.0
+        USER_AGENT: custom-nominatim:5.1.0
+    ports:
+      - "8081:8080"
+
+    environment:
+      # Try a different approach to disable flatnode
+      OSM2PGSQL_CACHE: 0
+      
+      # External RDS Configuration
+      PGHOST: nominatimdb.c7gqmm4ayxos.eu-west-3.rds.amazonaws.com
+      PGPORT: 5432
+      PGUSER: nominatimdb
+      PGPASSWORD: Oussama0909!
+      NOMINATIM_PASSWORD: Oussama0909!
+      
+      
+      # OSM Data - using extremely small dataset
+      KEEP_PBF: "false"
+      
+      
+      # Minimal threads
+      THREADS: 1
+      
+      # Raw osm2pgsql options to avoid flatnode file
+      NOMINATIM_OSMI_IMPORT_OPTIONS: "--slim --drop --hstore-all --cache 1000 --number-processes 4"
+    shm_size: 1gb
+
