@@ -1,11 +1,10 @@
 ARG NOMINATIM_VERSION=5.1.0
-ARG USER_AGENT=nominatim-production:${NOMINATIM_VERSION}
+ARG USER_AGENT=mediagis/nominatim-docker:${NOMINATIM_VERSION}
 
 FROM ubuntu:24.04 AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
 
 WORKDIR /app
 
@@ -52,7 +51,7 @@ ARG USER_AGENT
 
 # Nominatim install.
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked pip install --break-system-packages \
-    nominatim-db==$NOMINATIM_VERSION \
+    nominatim-db\
     osmium \
     psycopg[binary] \
     falcon \
@@ -81,77 +80,35 @@ COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 RUN chmod +x /app/config.sh
 RUN chmod +x /app/init.sh
-# Production runtime stage
-FROM ubuntu:24.04 AS runtime
+# Collapse image to single layer.
+FROM scratch
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
+COPY --from=build / /
 
-# Install only runtime dependencies
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-    postgresql-client \
-    python3 \
-    python3-pip \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Copy built application from build stage
-COPY --from=build /usr/local /usr/local
-COPY --from=build /app /app
-
-# Create non-root user for security
-RUN groupadd -r nominatim && useradd -r -g nominatim -d /nominatim -s /bin/bash nominatim
-
-# Environment variables (remove hardcoded credentials)
-ENV PROJECT_DIR=/nominatim
-ENV EFS_DIR=/efs
-ENV THREADS=4
-ENV NOMINATIM_API_POOL_SIZE=10
-ENV NOMINATIM_QUERY_TIMEOUT=60
-ENV NOMINATIM_REQUEST_TIMEOUT=60
-
-# Database connection (to be overridden by ECS task definition)
-ENV PGHOST=
+# Please override this
+ENV NOMINATIM_PASSWORD=""
+ENV PGHOST=""
 ENV PGPORT=5432
-ENV PGDATABASE=nominatim
-ENV PGUSER=nominatim
-ENV PGPASSWORD=
-ENV NOMINATIM_PASSWORD=
+ENV PGDATABASE=""
+ENV PGUSER=""
+ENV PGPASSWORD=""
+ENV PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
+ENV REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/
 
-# OSM Data configuration
-ENV PBF_URL=
-ENV PBF_PATH=
-ENV REPLICATION_URL=
-ENV IMPORT_STYLE=full
-ENV REVERSE_ONLY=false
-ENV KEEP_PBF=true
 
-# Performance tuning for production
-ENV NOMINATIM_OSMI_IMPORT_OPTIONS="--slim --drop --hstore-all --cache 4000 --number-processes 4"
-ENV OSM2PGSQL_CACHE=4000
+ENV PROJECT_DIR=/nominatim
 ARG USER_AGENT
 ENV USER_AGENT=${USER_AGENT}
-ENV PGSSLCERT /tmp/postgresql.crt
 
-# Create necessary directories
-RUN mkdir -p ${PROJECT_DIR} ${EFS_DIR} /var/log/nominatim \
-    && chown -R nominatim:nominatim ${PROJECT_DIR} ${EFS_DIR} /var/log/nominatim
+# important to set to avoid "could not open certificate file "/root/.postgresql/postgresql.crt": Permission denied" error
+ENV PGSSLCERT /tmp/postgresql.crt 
 
-# Copy configuration files
-COPY conf.d/env ${PROJECT_DIR}/.env
 
-WORKDIR ${PROJECT_DIR}
+WORKDIR /app
 
-# Health check for ECS
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/status || exit 1
-
+EXPOSE 5432
 EXPOSE 8080
 
-# Use non-root user
-USER nominatim
+COPY conf.d/env $PROJECT_DIR/.env
 
 CMD ["/app/start.sh"]
