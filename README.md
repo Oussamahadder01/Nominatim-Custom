@@ -1,31 +1,21 @@
 # Nominatim Production Docker Image
 
-A production-ready Docker image for Nominatim geocoding service, optimized for deployment on AWS ECS with EFS storage and RDS PostgreSQL.
-
-## Features
-
-- **Production-optimized**: Multi-stage Docker build with security hardening
-- **AWS ECS ready**: Designed for Fargate deployment with proper health checks
-- **EFS integration**: Persistent storage for OSM data files
-- **RDS PostgreSQL**: External database support with connection pooling
-- **Auto-scaling friendly**: Stateless design with shared storage
-- **Comprehensive logging**: Structured logging for production monitoring
-- **Security hardened**: Non-root user, minimal attack surface
+A production-ready Docker image for Nominatim geocoding service, customized for deployment on AWS ECS with EFS storage and RDS PostgreSQL.
 
 ## Architecture
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Application   │    │   Load Balancer │    │      Users      │
+│   Application   │    │   Load Balancer │    │      User       │
 │   Load Balancer │◄───┤      (ALB)      │◄───┤                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
          │
          ▼
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   ECS Cluster   │    │   EFS Storage   │    │  RDS PostgreSQL │
-│                 │◄───┤   (OSM Data)    │    │   (Nominatim    │
-│  ┌───────────┐  │    │                 │    │    Tables)      │
-│  │Nominatim  │  │    └─────────────────┘    │                 │
+┌─────────────────┐    ┌─────────────────┐      ┌─────────────────┐
+│   ECS Cluster   │    │   EFS Storage   │      │  RDS PostgreSQL │
+│                 │◄───┤   (OSM Data)    │      │   (Nominatim    │
+│  ┌───────────┐  │    │                 │      │    Tables)      │
+│  │Nominatim  │  │    └─────────────────┘      │                 │
 │  │Container  │◄─┼─────────────────────────────┤                 │
 │  └───────────┘  │                             │                 │
 └─────────────────┘                             └─────────────────┘
@@ -91,69 +81,7 @@ docker tag nominatim-production:latest 123456789012.dkr.ecr.us-west-2.amazonaws.
 docker push 123456789012.dkr.ecr.us-west-2.amazonaws.com/nominatim-production:latest
 ```
 
-#### Step 2: Set up AWS Infrastructure
 
-1. **Create RDS PostgreSQL Instance**
-   - Engine: PostgreSQL 15+
-   - Instance class: db.r6g.xlarge or larger
-   - Storage: GP3 SSD, 100GB minimum
-   - Enable automated backups
-   - Configure security groups
-
-2. **Create EFS File System**
-   - Performance mode: General Purpose
-   - Throughput mode: Provisioned (adjust based on needs)
-   - Enable encryption at rest
-   - Create access points for ECS
-
-3. **Configure ECS Cluster**
-   - Use Fargate for serverless deployment
-   - Configure VPC with private subnets
-   - Set up Application Load Balancer
-
-#### Step 3: Deploy ECS Service
-
-```bash
-# Update the task definition with your values
-vim ecs-task-definition.json
-
-# Register task definition
-aws ecs register-task-definition --cli-input-json file://ecs-task-definition.json
-
-# Create ECS service
-aws ecs create-service \
-  --cluster your-cluster-name \
-  --service-name nominatim-production \
-  --task-definition nominatim-production:1 \
-  --desired-count 2 \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-12345,subnet-67890],securityGroups=[sg-abcdef],assignPublicIp=DISABLED}"
-```
-
-## Table of contents
-
-  - [Configuration](#configuration)
-    - [Environment Variables](#environment-variables)
-    - [Performance Tuning](#performance-tuning)
-  - [Monitoring](#monitoring)
-    - [Health Checks](#health-checks)
-    - [Logging](#logging)
-    - [Metrics](#metrics)
-  - [Security](#security)
-    - [Best Practices](#best-practices)
-    - [Network Security](#network-security)
-  - [Troubleshooting](#troubleshooting)
-    - [Common Issues](#common-issues)
-    - [Debug Commands](#debug-commands)
-  - [Scaling](#scaling)
-    - [Horizontal Scaling](#horizontal-scaling)
-    - [Vertical Scaling](#vertical-scaling)
-  - [Backup and Recovery](#backup-and-recovery)
-    - [Database Backup](#database-backup)
-    - [EFS Backup](#efs-backup)
-  - [Cost Optimization](#cost-optimization)
-
----
 
 ## Configuration
 
@@ -176,24 +104,6 @@ aws ecs create-service \
 
 *Either `PBF_URL` or `PBF_PATH` is required.
 
-### Performance Tuning
-
-#### Memory Allocation
-- **4GB RAM**: Basic setup, small regions
-- **8GB RAM**: Recommended for country-level imports
-- **16GB+ RAM**: Large countries or multiple countries
-
-#### CPU Allocation
-- **2 vCPU**: Minimum for production
-- **4 vCPU**: Recommended for good performance
-- **8+ vCPU**: High-traffic deployments
-
-#### Database Sizing
-- **Small region** (city): 1-5GB
-- **Country** (France): 20-50GB
-- **Large country** (Germany): 50-100GB
-- **Planet**: 500GB+
-
 
 ## Monitoring
 
@@ -213,67 +123,7 @@ Logs are structured and sent to:
 - `/var/log/nominatim/error.log` - Error logs
 - CloudWatch Logs (in ECS deployment)
 
-### Metrics
 
-Monitor these key metrics:
-- Response time (target: <100ms for simple queries)
-- Error rate (target: <1%)
-- Memory usage
-- Database connections
-- EFS throughput
-
-## Security
-
-### Best Practices
-
-1. **Use AWS Secrets Manager** for database passwords
-2. **Enable VPC Flow Logs** for network monitoring
-3. **Use IAM roles** instead of access keys
-4. **Enable EFS encryption** at rest and in transit
-5. **Configure security groups** with minimal required access
-6. **Regular security updates** of base images
-
-### Network Security
-
-```
-Internet Gateway
-       │
-   ┌───▼───┐
-   │  ALB  │ (Public Subnet)
-   └───┬───┘
-       │
-   ┌───▼───┐
-   │  ECS  │ (Private Subnet)
-   └───┬───┘
-       │
-   ┌───▼───┐
-   │  RDS  │ (Private Subnet)
-   └───────┘
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Import fails with memory error**
-   - Increase container memory
-   - Reduce `OSM2PGSQL_CACHE` value
-   - Use smaller OSM extract
-
-2. **Database connection timeout**
-   - Check security groups
-   - Verify RDS endpoint
-   - Check VPC routing
-
-3. **EFS mount fails**
-   - Verify EFS security groups
-   - Check ECS task role permissions
-   - Ensure EFS is in same VPC
-
-4. **Slow query performance**
-   - Check database indexes
-   - Increase RDS instance size
-   - Optimize query parameters
 
 ### Debug Commands
 
@@ -290,43 +140,3 @@ psql -h $PGHOST -U $PGUSER -d $PGDATABASE
 # Check Nominatim status
 nominatim admin --check-database
 ```
-
-## Scaling
-
-### Horizontal Scaling
-
-- Multiple ECS tasks can run simultaneously
-- Shared EFS storage ensures consistency
-- Load balancer distributes traffic
-- Database handles concurrent connections
-
-### Vertical Scaling
-
-- Increase ECS task CPU/memory
-- Scale RDS instance size
-- Increase EFS throughput
-
-## Backup and Recovery
-
-### Database Backup
-
-```bash
-# Automated RDS snapshots (recommended)
-# Manual backup
-pg_dump -h $PGHOST -U $PGUSER $PGDATABASE > nominatim_backup.sql
-```
-
-### EFS Backup
-
-- Enable AWS Backup for EFS
-- OSM data can be re-downloaded if needed
-- Keep PBF files for faster recovery
-
-## Cost Optimization
-
-1. **Use Spot instances** for non-critical workloads
-2. **Schedule scaling** based on usage patterns
-3. **Optimize EFS storage class** (IA for infrequent access)
-4. **Right-size RDS instances** based on actual usage
-5. **Use reserved instances** for predictable workloads
-
