@@ -1,10 +1,16 @@
+#!/bin/bash
+
+# Source EFS setup
+source /app/efs-setup.sh
+
+# Setup EFS if available
+setup_efs
+
 CONFIG_FILE=${PROJECT_DIR}/.env
 
 
 if [[ "$PBF_URL" = "" && "$PBF_PATH" = "" ]]  ||  [[ "$PBF_URL" != "" && "$PBF_PATH" != "" ]]; then
     echo "You need to specify either the PBF_URL or PBF_PATH environment variable"
-    echo "docker run -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf ..."
-    echo "docker run -e PBF_PATH=/nominatim/data/monaco-latest.osm.pbf ..."
     exit 1
 fi
 
@@ -39,7 +45,25 @@ fi
 
 # if flatnode directory was created by volume / mount, use flatnode files
 
-if [ -d "${PROJECT_DIR}/flatnode" ]; then sed -i 's\^NOMINATIM_FLATNODE_FILE=$\NOMINATIM_FLATNODE_FILE="/nominatim/flatnode/flatnode.file"\g' ${CONFIG_FILE}; fi
+if [ "$EFS_ENABLED" = "true" ]; then
+    FLATNODE_DIR="${EFS_MOUNT_POINT}/nominatim/flatnode"
+    FLATNODE_PATH="$FLATNODE_DIR/flatnode.file"
+    
+    mkdir -p "$FLATNODE_DIR"
+    chown -R nominatim:nominatim "$FLATNODE_DIR"
+    chmod -R 755 "$FLATNODE_DIR"
+    
+    sed -i "s|^NOMINATIM_FLATNODE_FILE=.*|NOMINATIM_FLATNODE_FILE=\"$FLATNODE_PATH\"|g" ${CONFIG_FILE}
+    echo "Configured flatnode to use EFS: $FLATNODE_PATH"
+else
+    FLATNODE_PATH="${PROJECT_DIR}/flatnode.file"
+    
+    mkdir -p "${PROJECT_DIR}"
+    chown -R nominatim:nominatim "${PROJECT_DIR}"
+    
+    sed -i "s|^NOMINATIM_FLATNODE_FILE=.*|NOMINATIM_FLATNODE_FILE=\"$FLATNODE_PATH\"|g" ${CONFIG_FILE}
+    echo "Configured flatnode to use local storage: $FLATNODE_PATH"
+fi
 
 # enable use of optional TIGER address data
 

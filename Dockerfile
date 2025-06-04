@@ -40,6 +40,7 @@ RUN  \
         postgresql-postgis-scripts \
         # Misc.
         curl \
+        wget \
         sudo \
         sshpass \
         openssh-client
@@ -75,11 +76,13 @@ RUN true \
 COPY config.sh /app/config.sh
 COPY init.sh /app/init.sh
 COPY start.sh /app/start.sh
+COPY setup-efs.sh /app/efs-setup.sh
 
 # Make all shell scripts executable
 RUN chmod +x /app/start.sh
 RUN chmod +x /app/config.sh
 RUN chmod +x /app/init.sh
+RUN chmod +x /app/efs-setup.sh
 # Collapse image to single layer.
 FROM scratch
 
@@ -96,9 +99,12 @@ ENV PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
 ENV REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/
 
 
-ENV PROJECT_DIR=/nominatim
+ENV PROJECT_DIR="/nominatim"
 ARG USER_AGENT
 ENV USER_AGENT=${USER_AGENT}
+ENV EFS_MOUNT_POINT=""
+ENV EFS_ENABLED="false"
+
 
 # important to set to avoid "could not open certificate file "/root/.postgresql/postgresql.crt": Permission denied" error
 ENV PGSSLCERT /tmp/postgresql.crt 

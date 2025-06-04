@@ -26,7 +26,7 @@ docker run -it \
   -e PGPORT=5432\
   -e PGPASSWORD=change_me\
   -p 8080:8080 \
-  -e IMPORT_WIKIPEDIA=/nominatim/extras/wikimedia-importance.csv.gz \
+  -e IMPORT_WIKIPEDIA=/nominatim/ewikimedia-importance.csv.gz \
   --name nominatim \
   nominatim
 ```

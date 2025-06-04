@@ -1,4 +1,7 @@
-#!/bin/bash -ex
+#!/bin/bash -x
+
+source /app/efs-setup.sh
+setup_efs || true
 
 tailpid=0
 replicationpid=0
@@ -32,24 +35,19 @@ else
   useradd -m -p ${NOMINATIM_PASSWORD} nominatim
 fi
 
-# Create tokenizer directories and set permissions
-mkdir -p ${PROJECT_DIR}/tokenizer
-chown -R nominatim:nominatim ${PROJECT_DIR}/tokenizer 2>/dev/null || true
-
 
 # Function to run a command as nominatim or directly depending on what works
 run_as_nominatim() {
-  # First try with sudo
-  if sudo -E -u nominatim "$@" 2>/dev/null; then
+  # First try with sudo from correct directory
+  if cd ${PROJECT_DIR} && sudo -E -u nominatim "$@" 2>/dev/null; then
     return 0
   else
-    echo "Warning: Failed to run command as nominatim user. Trying directly..."
-    # Try running directly
-    "$@"
+    echo "Warning: Failed to run command as nominatim user. Trying directly from correct directory..."
+    # Try running directly but from correct directory
+    cd ${PROJECT_DIR} && "$@"
     return $?
   fi
 }
-
 # Function to check if Nominatim database has been initialized properly
 check_database_initialized() {
   echo "Checking if database is already initialized..."
