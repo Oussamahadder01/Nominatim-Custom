@@ -1,41 +1,40 @@
-# Nominatim Docker (Nominatim version 5.1)
+# Nominatim Docker Image that can work with external RDS POSTGRESQL Database :
 
-## Table of contents
-
-  - [Automatic import](#automatic-import)
-  - [Configuration](#configuration)
-    - [General Parameters](#general-parameters)
-    - [PostgreSQL Tuning](#postgresql-tuning)
-    - [Import Style](#import-style)
-    - [Flatnode files](#flatnode-files)
-    - [Configuration Example](#configuration-example)
-  - [Persistent container data](#persistent-container-data)
-  - [OpenStreetMap Data Extracts](#openstreetmap-data-extracts)
-  - [Updating the database](#updating-the-database)
-  - [Custom PBF Files](#custom-pbf-files)
-  - [Importance Dumps, Postcode Data, and Tiger Addresses](#importance-dumps-postcode-data-and-tiger-addresses)
-  - [Development](#development)
-  - [Docker Compose](#docker-compose)
-  - [Assorted use cases documented in issues](#assorted-use-cases-documented-in-issues)
-
----
-
-## Automatic import
-
-Download the required data, initialize the database and start nominatim in one go
-
+## Quick Installation : 
+### 1. Install Docker and Docker Compose
 ```sh
+sudo apt update && sudo apt upgrade -y
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+```
+
+### 2. Build and Run Docker image : 
+```sh
+git clone https://github.com/Oussamahadder01/Nominatim-Custom.git
+cd Nominatim-Custom
+docker build -t nominatim .
 docker run -it \
   -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
   -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
+  -e PGHOST=change_me\
+  -e NOMINATIM_PASSWORD=change_me\
+  -e PGUSER=change_me\
+  -e PGDATABASE=change_me\
+  -e PGPORT=5432\
+  -e PGPASSWORD=change_me\
   -p 8080:8080 \
+  -e IMPORT_WIKIPEDIA=/nominatim/extras/wikimedia-importance.csv.gz \
   --name nominatim \
-  mediagis/nominatim:5.1
+  nominatim
 ```
 
-Port 8080 is the nominatim HTTP API port and 5432 is the Postgres port, which you may or may not want to expose.
+### 3.Run the service : 
+Port 8081 is the nominatim HTTP API port and 5432 is the Postgres port, which you may or may not want to expose.
 
-If you want to check that your data import was successful, you can use the API with the following URL: http://localhost:8080/search.php?q=avenue%20pasteur
+If you want to check that your data import was successful, you can use the API with the following URL: http://localhost:8081/search.php?q=avenue%20pasteur
 
 ## Configuration
 
@@ -67,22 +66,6 @@ Other places at Geofabrik follow the pattern `https://download.geofabrik.de/$CON
 The following run parameters are available for configuration:
 
 - `shm-size`: Size of the tmpfs in Docker, for bigger imports (e.g. Europe) this needs to be set to at least 1GB or more. Half the size of your available RAM is recommended. (default: `64M`)
-
-### PostgreSQL Tuning
-
-The following environment variables are available to tune PostgreSQL:
-
-- `POSTGRES_SHARED_BUFFERS` (default: `2GB`)
-- `POSTGRES_MAINTENANCE_WORK_MEM` (default: `10GB`)
-- `POSTGRES_AUTOVACUUM_WORK_MEM` (default: `2GB`)
-- `POSTGRES_WORK_MEM` (default: `50MB`)
-- `POSTGRES_EFFECTIVE_CACHE_SIZE` (default: `24GB`)
-- `POSTGRES_SYNCHRONOUS_COMMIT` (default: `off`)
-- `POSTGRES_MAX_WAL_SIZE` (default: `1GB`)
-- `POSTGRES_CHECKPOINT_TIMEOUT` (default: `10min`)
-- `POSTGRES_CHECKPOINT_COMPLETION_TARGET` (default: `0.9`)
-
-See https://nominatim.org/release-docs/5.1/admin/Installation/#tuning-the-postgresql-database for more details on those settings.
 
 ### Import Style
 
@@ -179,7 +162,7 @@ docker exec -it nominatim sudo -u nominatim nominatim replication --help
 The following command will keep updating the database forever:
 
 ```sh
-docker exec -it nominatim sudo -u nominatim nominatim replication --project-dir /nominatim
+docker exec -it nominatim sudo -E -u nominatim nominatim replication --project-dir /nominatim
 ```
 
 If there are no updates available this process will sleep for 15 minutes and try again.
@@ -216,34 +199,3 @@ docker run -it \
 Where the path to the importance dump is given relative to the container. (The file does not need to be named `wikimedia-importance.sql.gz`.) The same works for `IMPORT_US_POSTCODES` and `IMPORT_GB_POSTCODES`.
 
 For more information about the Tiger address file, see [Installing TIGER housenumber data for the US](https://nominatim.org/release-docs/5.1/customize/Tiger/).
-
-## Development
-
-If you want to work on the Docker image you can use the following command to build a local
-image and run the container with
-
-```sh
-docker build -t nominatim . && \
-docker run -it \
-    -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-    -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
-    -p 8080:8080 \
-    --name nominatim \
-    nominatim
-```
-
-## Docker Compose
-
-In addition, we also provide a basic `contrib/docker-compose.yml` template which you use as a starting point and adapt to your needs. Use this template to set the environment variables, mounts, etc. as needed.
-
-Besides the basic docker-compose.yml, there are also some advanced YAML configurations available in the `contrib` folder.
-These files follow the naming convention of `docker-compose-*.yml` and contain comments about the specific use case.
-
-## Assorted use cases documented in issues
-
-- [Using an external Postgres database](https://github.com/mediagis/nominatim-docker/issues/245#issuecomment-1072205751)
-  - [Using Amazon's RDS](https://github.com/mediagis/nominatim-docker/issues/378#issuecomment-1278653770)
-- [Hardware sizing for importing the entire planet](https://github.com/mediagis/nominatim-docker/discussions/265)
-- [Upgrading Nominatim](https://github.com/mediagis/nominatim-docker/discussions/317)
-- [Using Nominatim UI](https://github.com/mediagis/nominatim-docker/discussions/486#discussioncomment-7239861)
-

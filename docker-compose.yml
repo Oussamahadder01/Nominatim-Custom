@@ -21,18 +21,11 @@ services:
       # External RDS Configuration
       PGHOST: nominatimdb.c7gqmm4ayxos.eu-west-3.rds.amazonaws.com
       PGPORT: 5432
-      PGUSER: nominatimdb
+      PGUSER: postgres
       PGPASSWORD: Oussama0909!
       NOMINATIM_PASSWORD: Oussama0909!
-      PGDATABASE: nominatimdb1
-      
-      
-      # OSM Data - using extremely small dataset
-      KEEP_PBF: "false"
-      
-      
-      # Minimal threads
-      THREADS: 1
+      PGDATABASE: nominatimdb      
+      THREADS: 4
       
       # Raw osm2pgsql options to avoid flatnode file
       NOMINATIM_OSMI_IMPORT_OPTIONS: "--slim --drop --hstore-all --cache 1000 --number-processes 4"

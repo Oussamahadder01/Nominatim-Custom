@@ -4,7 +4,7 @@ OSMFILE=${PROJECT_DIR}/data.osm.pbf
 
 CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-with-body")
 
-SCP='sshpass -p DMg5bmLPY7npHL2Q scp -o StrictHostKeyChecking=no u355874-sub1@u355874-sub1.your-storagebox.de'
+URL_DOWNLOAD=https://nominatim.org/data/
 
 # Check if THREADS is not set or is empty
 if [ -z "$THREADS" ]; then
@@ -20,37 +20,25 @@ fi
 #  (using wget -O secondary_importance.sql.gz https://nominatim.org/data/wikimedia-secondary-importance.sql.gz)
 if [ "$IMPORT_WIKIPEDIA" = "true" ]; then
   echo "Downloading Wikipedia importance dump"
-  ${SCP}:wikimedia-importance.csv.gz ${PROJECT_DIR}/wikimedia-importance.csv.gz
-elif [ -f "$IMPORT_WIKIPEDIA" ]; then
-  # use local file if asked
-  ln -s "$IMPORT_WIKIPEDIA" ${PROJECT_DIR}/wikimedia-importance.csv.gz
+  wget -O ${PROJECT_DIR}/wikimedia-importance.csv.gz ${URL_DOWNLOAD}/wikimedia-importance.csv.gz
 else
   echo "Skipping optional Wikipedia importance import"
 fi;
 
 if [ "$IMPORT_GB_POSTCODES" = "true" ]; then
-  ${SCP}:gb_postcodes.csv.gz ${PROJECT_DIR}/gb_postcodes.csv.gz
-elif [ -f "$IMPORT_GB_POSTCODES" ]; then
-  # use local file if asked
-  ln -s "$IMPORT_GB_POSTCODES" ${PROJECT_DIR}/gb_postcodes.csv.gz
+  wget -O ${PROJECT_DIR}/gb_postcodes.csv.gz ${URL_DOWNLOAD}/gb_postcodes.csv.gz
 else \
   echo "Skipping optional GB postcode import"
 fi;
 
 if [ "$IMPORT_US_POSTCODES" = "true" ]; then
-  ${SCP}:us_postcodes.csv.gz ${PROJECT_DIR}/us_postcodes.csv.gz
-elif [ -f "$IMPORT_US_POSTCODES" ]; then
-  # use local file if asked
-  ln -s "$IMPORT_US_POSTCODES" ${PROJECT_DIR}/us_postcodes.csv.gz
+  wget -O ${PROJECT_DIR}/us_postcodes.csv.gz ${URL_DOWNLOAD}/us_postcodes.csv.gz
 else
   echo "Skipping optional US postcode import"
 fi;
 
 if [ "$IMPORT_TIGER_ADDRESSES" = "true" ]; then
-  ${SCP}:tiger2023-nominatim-preprocessed.csv.tar.gz ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz
-elif [ -f "$IMPORT_TIGER_ADDRESSES" ]; then
-  # use local file if asked
-  ln -s "$IMPORT_TIGER_ADDRESSES" ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz
+  wget -O ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz ${URL_DOWNLOAD}/tiger-nominatim-preprocessed-latest.csv.tar.gz 
 else
   echo "Skipping optional Tiger addresses import"
 fi
@@ -58,6 +46,13 @@ fi
 if [ "$PBF_URL" != "" ]; then
   echo Downloading OSM extract from "$PBF_URL"
   "${CURL[@]}" "$PBF_URL" --create-dirs -o $OSMFILE
+  if [ $? -ne 0 ]; then
+    echo "Failed to download OSM extract from $PBF_URL"
+    exit 1
+  fi
+  elif [ "$PBF_PATH" = "" ] && [ "$PBF_URL" = "" ]; then
+  echo "No PBF_PATH or PBF_URL provided, exiting."
+  exit 1
 fi
 
 if [ "$PBF_PATH" != "" ]; then
@@ -65,22 +60,18 @@ if [ "$PBF_PATH" != "" ]; then
   OSMFILE=$PBF_PATH
 fi
 
-
-
 echo "Setting up database users..."
 
 # Create nominatim user if it doesn't exist
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='nominatim'" | grep -q 1 || \
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "CREATE USER nominatim WITH PASSWORD '$NOMINATIM_PASSWORD';"
-
 # Grant RDS superuser role to nominatim
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "GRANT rds_superuser TO nominatim;"
 
-# Grant database privileges
-PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE $PGDATABASE TO nominatim;"
 
-# Grant privileges to www-data user
-PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE $PGDATABASE TO \"www-data\";"
+# Create www-data user if it doesn't exist
+PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='www-data'" | grep -q 1 || \
+PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "CREATE USER \"www-data\" WITH PASSWORD '$NOMINATIM_PASSWORD';"
 
 # drop table nominatim if it exists (because it throws error when importing with nominatim)
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "DROP DATABASE IF EXISTS nominatim;"
@@ -120,8 +111,6 @@ else
   fi
 fi
 
-export NOMINATIM_QUERY_TIMEOUT=600
-export NOMINATIM_REQUEST_TIMEOUT=3600
 export NOMINATIM_QUERY_TIMEOUT=10
 export NOMINATIM_REQUEST_TIMEOUT=60
 

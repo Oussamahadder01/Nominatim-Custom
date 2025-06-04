@@ -33,22 +33,9 @@ else
 fi
 
 # Create tokenizer directories and set permissions
-mkdir -p /nominatim/tokenizer
 mkdir -p ${PROJECT_DIR}/tokenizer
-chown -R nominatim:nominatim /nominatim/tokenizer 2>/dev/null || true
 chown -R nominatim:nominatim ${PROJECT_DIR}/tokenizer 2>/dev/null || true
 
-# Fix the replication URL in the configuration file
-if [ "$REPLICATION_URL" != "" ]; then
-  echo "Setting up replication URL: $REPLICATION_URL"
-  # Replace the placeholder in the .env file
-  sed -i "s|NOMINATIM_REPLICATION_URL=__REPLICATION_URL__|NOMINATIM_REPLICATION_URL=$REPLICATION_URL|g" ${PROJECT_DIR}/.env
-  cat ${PROJECT_DIR}/.env | grep REPLICATION_URL
-else
-  echo "No replication URL provided. Skipping replication setup."
-  # Clear the placeholder to avoid errors
-  sed -i "s|NOMINATIM_REPLICATION_URL=__REPLICATION_URL__|NOMINATIM_REPLICATION_URL=|g" ${PROJECT_DIR}/.env
-fi
 
 # Function to run a command as nominatim or directly depending on what works
 run_as_nominatim() {
@@ -66,10 +53,9 @@ run_as_nominatim() {
 # Function to check if Nominatim database has been initialized properly
 check_database_initialized() {
   echo "Checking if database is already initialized..."
-  
   # Connect to the database and check for key Nominatim tables
   # Return 0 (true) if already initialized, 1 (false) if not
-  if ! PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE -t -c "
+  if ! PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim -t -c "
   SELECT EXISTS (
     SELECT FROM pg_tables 
     WHERE schemaname='public' 
@@ -109,35 +95,27 @@ check_database_initialized() {
 
 
 # First check if database exists and has been initialized
-DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='$PGDATABASE'" 2>/dev/null | grep -c 1 || echo "0")
-DB_INITIALIZED=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d $PGDATABASE -t -c "
-  SELECT EXISTS (
-    SELECT FROM pg_tables 
-    WHERE schemaname='public' 
-    AND tablename IN ('placex', 'place', 'search_name', 'word')
-  )")
+DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='nominatim'" 2>/dev/null | grep -c 1 || echo "0")
 SKIP_IMPORT=false
 
 if [ "$DB_EXISTS" -eq "1" ]; then
   echo "Database $PGDATABASE exists, checking if it's properly initialized..."
+  check_database_initialized
+  DB_INITIALIZED=$?
   # Check if the database is initialized properly
-  if [ "$DB_INITIALIZED" = "t" ]; then
-    echo "Database is already initialized with Nominatim tables."
-    # Check if we should skip the import
-    if [ "$SKIP_IMPORT" = "true" ]; then
-      echo "Skipping import as requested."
-      SKIP_IMPORT=true
-    else
-      echo "Import not skipped. Will proceed with reimport if needed."
-      SKIP_IMPORT=false
-    fi
+  if [ "$DB_INITIALIZED" -eq 0 ]; then
+    echo "Database is properly initialized with Nominatim tables."
+    # Check if the import has already been marked as finished
+    SKIP_IMPORT=true
+  elif [ "$DB_INITIALIZED" -eq 2 ]; then
+    echo "Database integrity check failed. May need repair."
+    # If the database is not properly initialized, we will need to reimport
+    echo "Database integrity check failed. Will proceed with reimport."
   else
     echo "Database exists but is not properly initialized. Will proceed with import."
-    SKIP_IMPORT=false
   fi
 else
   # Database does not exist, we will need to import
-  SKIP_IMPORT=false
   echo "Database doesn't exist. Will proceed with import."
   # Run config.sh since we'll need to do an import
   /app/config.sh
@@ -164,37 +142,25 @@ run_as_nominatim nominatim refresh --word-counts || echo "Word count refresh fai
 # Refresh functions
 cd ${PROJECT_DIR} && run_as_nominatim nominatim refresh --functions || echo "Function refresh failed, but continuing"
 
-# Start continuous replication process - but only if REPLICATION_URL is valid and not a placeholder
-if [ "$REPLICATION_URL" != "" ] && [ "$REPLICATION_URL" != "__REPLICATION_URL__" ] && [ "$FREEZE" != "true" ]; then
-  echo "Setting up replication with URL: $REPLICATION_URL"
-  
-  # Make sure the replication URL is properly set in the configuration
-  sed -i "s|NOMINATIM_REPLICATION_URL=.*|NOMINATIM_REPLICATION_URL=$REPLICATION_URL|g" ${PROJECT_DIR}/.env
-  
-  # Try to initialize replication
-  if run_as_nominatim nominatim replication --project-dir ${PROJECT_DIR} --init; then
-    echo "Replication initialized successfully"
-    
-    if [ "$UPDATE_MODE" == "continuous" ]; then
-      echo "Starting continuous replication"
-      run_as_nominatim nominatim replication --project-dir ${PROJECT_DIR} &> /var/log/replication.log &
-      replicationpid=${!}
-    elif [ "$UPDATE_MODE" == "once" ]; then
-      echo "Starting replication once"
-      run_as_nominatim nominatim replication --project-dir ${PROJECT_DIR} --once &> /var/log/replication.log &
-      replicationpid=${!}
-    elif [ "$UPDATE_MODE" == "catch-up" ]; then
-      echo "Starting replication once in catch-up mode"
-      run_as_nominatim nominatim replication --project-dir ${PROJECT_DIR} --catch-up &> /var/log/replication.log &
-      replicationpid=${!}
-    else
-      echo "Skipping replication - no valid update mode specified"
-    fi
+# start continous replication process
+if [ "$REPLICATION_URL" != "" ] && [ "$FREEZE" != "true" ]; then
+  # run init in case replication settings changed
+  sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --init
+  if [ "$UPDATE_MODE" == "continuous" ]; then
+    echo "starting continuous replication"
+    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} &> /var/log/replication.log &
+    replicationpid=${!}
+  elif [ "$UPDATE_MODE" == "once" ]; then
+    echo "starting replication once"
+    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --once &> /var/log/replication.log &
+    replicationpid=${!}
+  elif [ "$UPDATE_MODE" == "catch-up" ]; then
+    echo "starting replication once in catch-up mode"
+    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --catch-up &> /var/log/replication.log &
+    replicationpid=${!}
   else
-    echo "Replication initialization failed. Skipping replication."
+    echo "skipping replication"
   fi
-else
-  echo "Skipping replication - no valid replication URL provided or freeze is enabled"
 fi
 
 # Start a tail process to keep the container running
