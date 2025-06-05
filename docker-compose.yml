@@ -10,14 +10,11 @@ services:
       context: .
       args:
         NOMINATIM_VERSION: 5.1.0
-        USER_AGENT: custom-nominatim:5.1.0
+        USER_AGENT: mediagis/nominatim-docker:5.1.0
     ports:
       - "8081:8080"
 
     environment:
-      # Try a different approach to disable flatnode
-      OSM2PGSQL_CACHE: 0
-      
       # External RDS Configuration
       PGHOST: nominatimdb.c7gqmm4ayxos.eu-west-3.rds.amazonaws.com
       PGPORT: 5432
@@ -28,8 +25,5 @@ services:
       THREADS: 4
       NOMINATIM_DATABASE_DSN: pgsql:host=nominatimdb.c7gqmm4ayxos.eu-west-3.rds.amazonaws.com;port=5432;user=postgres;password=Oussama0909!;dbname=nominatim
 
-      
-      # Raw osm2pgsql options to avoid flatnode file
-      NOMINATIM_OSMI_IMPORT_OPTIONS: "--slim --drop --hstore-all --cache 1000 --number-processes 4"
     shm_size: 1gb
 

@@ -83,20 +83,21 @@ download_us_postcodes() {
     fi
 }
 
-download_tiger() {
-    if [ "$IMPORT_TIGER_ADDRESSES" = "true" ]; then
-        echo "Downloading Tiger addresses to PROJECT_DIR"
-        ${SCP}:tiger2023-nominatim-preprocessed.csv.tar.gz ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz
-    else
-        echo "Skipping optional Tiger addresses import"
-    fi
-}
+#takes too much time to download and is not needed for most imports
+# download_tiger() {
+#     if [ "$IMPORT_TIGER_ADDRESSES" = "true" ]; then
+#         echo "Downloading Tiger addresses to PROJECT_DIR"
+#         ${SCP}:tiger2023-nominatim-preprocessed.csv.tar.gz ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz
+#     else
+#         echo "Skipping optional Tiger addresses import"
+#     fi
+# }
 
 # Execute downloads
 download_wikipedia
 download_gb_postcodes
 download_us_postcodes
-download_tiger
+# download_tiger
 
 # Download OSM file
 if [ "$PBF_URL" != "" ]; then
@@ -106,7 +107,7 @@ if [ "$PBF_URL" != "" ]; then
         OSMFILE_LOCAL="${PROJECT_DIR}/data.osm.pbf"
         
         echo "Downloading OSM extract to EFS: $OSMFILE_EFS"
-        curl -L -o "$OSMFILE_EFS" "$PBF_URL"
+        "${CURL[@]}" "$PBF_URL" -C - --create-dirs -o $OSMFILE_EFS
         
         if [ $? -ne 0 ]; then
             echo "Failed to download OSM extract from $PBF_URL"
@@ -189,10 +190,10 @@ else
 fi
 
 # Continue with the rest of your script...
-if [ -f "${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz" ]; then
-    echo "Importing Tiger address data"
-    sudo -E -u nominatim nominatim add-data --tiger-data "${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz"
-fi
+# if [ -f "${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz" ]; then
+#     echo "Importing Tiger address data"
+#     sudo -E -u nominatim nominatim add-data --tiger-data "${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz"
+# fi
 
 sudo -E -u nominatim nominatim index --threads $THREADS
 sudo -E -u nominatim nominatim admin --check-database
@@ -215,6 +216,10 @@ export NOMINATIM_REQUEST_TIMEOUT=60
 sudo -E -u nominatim psql -d nominatim -c "ANALYZE VERBOSE"
 
 echo "Deleting downloaded dumps in ${PROJECT_DIR}"
+rm -f ${EFS_MOUNT_POINT}/nominatim/downloads/*sql.gz
+rm -f ${EFS_MOUNT_POINT}/nominatim/downloads/*csv.gz
+rm -f ${EFS_MOUNT_POINT}/nominatim/downloads/tiger-nominatim-preprocessed.csv.tar.gz
+
 rm -f ${PROJECT_DIR}/*sql.gz
 rm -f ${PROJECT_DIR}/*csv.gz
 rm -f ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz
