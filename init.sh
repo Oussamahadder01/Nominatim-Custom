@@ -1,5 +1,6 @@
 #!/bin/bash -ex
 
+
 EFS_MOUNT_POINT="/efs"
 
 # Setup EFS if available
@@ -161,6 +162,9 @@ if [ "$REVERSE_ONLY" = "true" ]; then
 else
     sudo -E -u nominatim nominatim import --osm-file "$OSMFILE" --threads $THREADS
 fi
+
+#initialize replication table 
+sudo -E -u nominatim nominatim replication --init --threads $THREADS
 
 
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim << EOF

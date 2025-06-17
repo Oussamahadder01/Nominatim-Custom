@@ -107,7 +107,7 @@ ENV EFS_ENABLED="false"
 
 
 # important to set to avoid "could not open certificate file "/root/.postgresql/postgresql.crt": Permission denied" error
-ENV PGSSLCERT /tmp/postgresql.crt 
+ENV PGSSLCERT=/tmp/postgresql.crt 
 
 
 WORKDIR /app
