@@ -1,7 +1,6 @@
 #!/bin/bash -ex
 
-# Source EFS setup
-source /app/efs-setup.sh
+EFS_MOUNT_POINT="/efs"
 
 # Setup EFS if available
 setup_efs || true
@@ -21,24 +20,19 @@ if ! id nominatim >/dev/null 2>&1; then
 fi
 
 # Determine storage paths and download directly where needed
-if [ "$EFS_ENABLED" = "true" ]; then
-    DOWNLOAD_DIR="${EFS_MOUNT_POINT}/nominatim/downloads"
-    DATA_DIR="${EFS_MOUNT_POINT}/nominatim/data"
-    
-    # Create EFS directories
-    mkdir -p "$DOWNLOAD_DIR"
-    mkdir -p "$DATA_DIR"
-    
-    # Set ownership of EFS directories
-    chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
-    chmod -R 755 "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
-    
-    echo "Using EFS storage"
-else
-    DOWNLOAD_DIR="${PROJECT_DIR}"
-    DATA_DIR="${PROJECT_DIR}"
-    echo "Using local storage"
-fi
+DOWNLOAD_DIR="${EFS_MOUNT_POINT}/nominatim/downloads"
+DATA_DIR="${EFS_MOUNT_POINT}/nominatim/data"
+
+# Create EFS directories
+mkdir -p "$DOWNLOAD_DIR"
+mkdir -p "$DATA_DIR"
+
+# Set ownership of EFS directories
+chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
+chmod -R 755 "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
+
+echo "Using EFS storage"
+
 
 # Create PROJECT_DIR and set ownership
 mkdir -p "${PROJECT_DIR}"
@@ -99,40 +93,19 @@ download_gb_postcodes
 download_us_postcodes
 # download_tiger
 
+
+TIMESTAMP=$(date +%Y%m%d)
 # Download OSM file
 if [ "$PBF_URL" != "" ]; then
-    if [ "$EFS_ENABLED" = "true" ]; then
         # Download to EFS but also copy to PROJECT_DIR for Nominatim
-        OSMFILE_EFS="$DATA_DIR/data.osm.pbf"
-        OSMFILE_LOCAL="${PROJECT_DIR}/data.osm.pbf"
-        
-        echo "Downloading OSM extract to EFS: $OSMFILE_EFS"
-        "${CURL[@]}" "$PBF_URL" -C - --create-dirs -o $OSMFILE_EFS
+        OSMFILE="/efs/data/planet_${TIMESTAMP}.osm.pbf"
+        echo "Downloading OSM extract to EFS: $OSMFILE"
+        "${CURL[@]}" "$PBF_URL" -C - --create-dirs -o $OSMFILE
         
         if [ $? -ne 0 ]; then
             echo "Failed to download OSM extract from $PBF_URL"
             exit 1
         fi
-        
-        # Copy to local PROJECT_DIR with proper permissions
-        echo "Copying OSM file to PROJECT_DIR with proper permissions"
-        cp "$OSMFILE_EFS" "$OSMFILE_LOCAL"
-        chown nominatim:nominatim "$OSMFILE_LOCAL"
-        chmod 644 "$OSMFILE_LOCAL"
-        
-        # Use local file for import
-        OSMFILE="$OSMFILE_LOCAL"
-    else
-        # Direct local download
-        OSMFILE="${PROJECT_DIR}/data.osm.pbf"
-        echo "Downloading OSM extract to $OSMFILE"
-        sudo -u nominatim curl -L -o "$OSMFILE" "$PBF_URL"
-        
-        if [ $? -ne 0 ]; then
-            echo "Failed to download OSM extract from $PBF_URL"
-            exit 1
-        fi
-    fi
 elif [ "$PBF_PATH" != "" ]; then
     echo "Using OSM extract from $PBF_PATH"
     OSMFILE="$PBF_PATH"
@@ -189,26 +162,23 @@ else
     sudo -E -u nominatim nominatim import --osm-file "$OSMFILE" --threads $THREADS
 fi
 
-# Continue with the rest of your script...
-# if [ -f "${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz" ]; then
-#     echo "Importing Tiger address data"
-#     sudo -E -u nominatim nominatim add-data --tiger-data "${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz"
-# fi
+
+PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim << EOF
+CREATE TABLE IF NOT EXISTS import_progress (
+    id SERIAL PRIMARY KEY,
+    status VARCHAR(20) NOT NULL,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+);
+INSERT INTO import_progress (status) 
+    VALUES ('completed')
+    ON CONFLICT DO NOTHING;
+EOF
+
+
 
 sudo -E -u nominatim nominatim index --threads $THREADS
 sudo -E -u nominatim nominatim admin --check-database
 
-if [ "$REPLICATION_URL" != "" ]; then
-    sudo -E -u nominatim nominatim replication --init
-    if [ "$FREEZE" = "true" ]; then
-        echo "Skipping freeze because REPLICATION_URL is not empty"
-    fi
-else
-    if [ "$FREEZE" = "true" ]; then
-        echo "Freezing database"
-        sudo -E -u nominatim nominatim freeze
-    fi
-fi
 
 export NOMINATIM_QUERY_TIMEOUT=10
 export NOMINATIM_REQUEST_TIMEOUT=60

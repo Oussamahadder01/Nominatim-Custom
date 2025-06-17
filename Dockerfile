@@ -22,6 +22,7 @@ RUN  \
     && apt-get -y update -qq \
     && apt-get -y install \
         locales \
+        -y cron \
     && locale-gen en_US.UTF-8 \
     && update-locale LANG=en_US.UTF-8 \
     && apt-get -y install \
@@ -76,13 +77,12 @@ RUN true \
 COPY config.sh /app/config.sh
 COPY init.sh /app/init.sh
 COPY start.sh /app/start.sh
-COPY setup-efs.sh /app/efs-setup.sh
+COPY updater.sh /app/updater.sh
 
 # Make all shell scripts executable
 RUN chmod +x /app/start.sh
 RUN chmod +x /app/config.sh
 RUN chmod +x /app/init.sh
-RUN chmod +x /app/efs-setup.sh
 # Collapse image to single layer.
 FROM scratch
 
@@ -96,7 +96,7 @@ ENV PGDATABASE=""
 ENV PGUSER=""
 ENV PGPASSWORD=""
 ENV PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
-ENV REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/
+ENV REPLICATION_URL=
 
 
 ENV PROJECT_DIR="/nominatim"
@@ -116,5 +116,8 @@ EXPOSE 5432
 EXPOSE 8080
 
 COPY conf.d/env $PROJECT_DIR/.env
+
+RUN echo "* * * * * /app/updater.sh >> /var/log/nominatim-cron.log 2>&1" | crontab -
+
 
 CMD ["/app/start.sh"]

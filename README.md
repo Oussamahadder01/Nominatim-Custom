@@ -18,7 +18,6 @@ cd Nominatim-Custom
 docker build -t nominatim .
 docker run -it \
   -e PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf \
-  -e REPLICATION_URL=https://download.geofabrik.de/europe/monaco-updates/ \
   -e PGHOST=nominatimdb.c7gqmm4ayxos.eu-west-3.rds.amazonaws.com \
   -e NOMINATIM_PASSWORD='Oussama0909!' \
   -e PGUSER=postgres \
@@ -27,11 +26,9 @@ docker run -it \
   -e PGPASSWORD='Oussama0909!' \
   -p 8080:8080 \
   -e IMPORT_WIKIPEDIA=true \
-  -e EFS_MOUNT_POINT=/efs \
-  -e EFS_ENABLED=true \
   -v /efs:/efs \
   --name nominatim \
-  oussamahadder01/nominatim:latest
+  nominatim_final
 ```
 
 ### 3.Run the service : 
