@@ -1,10 +1,19 @@
 #!/bin/bash -ex
 
+if ! command -v sshpass &> /dev/null; then
+    echo "Installing sshpass..."
+    cd /tmp
+    curl -L -o sshpass-1.09.tar.gz https://sourceforge.net/projects/sshpass/files/sshpass/1.09/sshpass-1.09.tar.gz/download
+    tar -xzf sshpass-1.09.tar.gz
+    cd sshpass-1.09
+    ./configure
+    make
+    make install
+    cd /
+    rm -rf /tmp/sshpass*
+fi
 
 EFS_MOUNT_POINT="/efs"
-
-# Setup EFS if available
-setup_efs || true
 
 CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-with-body")
 SCP='sshpass -p DMg5bmLPY7npHL2Q scp -o StrictHostKeyChecking=no u355874-sub1@u355874-sub1.your-storagebox.de'
@@ -139,8 +148,19 @@ else
     echo "User www-data already exists"
 fi
 
-# drop database nominatim if it exists
-PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "DROP DATABASE IF EXISTS nominatim;"
+
+skip_import=false
+# drop database nominatim if it exists and if import_progress table doens't exists and doesn't have "completed" status
+if PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='nominatim'" | grep -q 1; then
+    if ! PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim -tAc "SELECT 1 FROM import_progress WHERE status='completed'" | grep -q 1; then
+        echo "Dropping existing nominatim database..."
+        PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "DROP DATABASE nominatim;"
+        skip_import=false
+    else
+        echo "Nominatim database already exists and is initialized, skipping drop."
+        skip_import=true
+    fi
+fi
 
 echo "Database users configured successfully."
 
@@ -160,21 +180,19 @@ echo "Can nominatim read: $(sudo -u nominatim test -r "$OSMFILE" && echo YES || 
 echo "================================="
 
 # Import with the determined OSMFILE path
-if [ "$REVERSE_ONLY" = "true" ]; then
-    sudo -E -u nominatim nominatim import --osm-file "$OSMFILE" --threads $THREADS --reverse-only
-else
-    sudo -E -u nominatim nominatim import --osm-file "$OSMFILE" --threads $THREADS
+if [ "${skip_import}" = false ]; then
+    nominatim import --osm-file "$OSMFILE" --threads $THREADS
 fi
 
 #initialize replication table 
-sudo -E -u nominatim nominatim replication --init --threads $THREADS
+nominatim replication --init --threads $THREADS
 
 
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim << EOF
 CREATE TABLE IF NOT EXISTS import_progress (
     id SERIAL PRIMARY KEY,
     status VARCHAR(20) NOT NULL,
-    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 INSERT INTO import_progress (status) 
     VALUES ('completed')
@@ -183,14 +201,14 @@ EOF
 
 
 
-sudo -E -u nominatim nominatim index --threads $THREADS
-sudo -E -u nominatim nominatim admin --check-database
+nominatim index --threads $THREADS
+nominatim admin --check-database
 
 
 export NOMINATIM_QUERY_TIMEOUT=10
 export NOMINATIM_REQUEST_TIMEOUT=60
 
-sudo -E -u nominatim psql -d nominatim -c "ANALYZE VERBOSE"
+psql -d nominatim -c "ANALYZE VERBOSE"
 
 echo "Deleting downloaded dumps in ${PROJECT_DIR}"
 rm -f ${EFS_MOUNT_POINT}/nominatim/downloads/*sql.gz

@@ -1,96 +1,125 @@
 ARG NOMINATIM_VERSION=5.1.0
 ARG USER_AGENT=mediagis/nominatim-docker:${NOMINATIM_VERSION}
 
-FROM ubuntu:24.04 AS build
+FROM registry.access.redhat.com/ubi9/ubi:latest AS build
 
-ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 
 WORKDIR /app
 
-# Inspired by https://github.com/reproducible-containers/buildkit-cache-dance?tab=readme-ov-file#apt-get-github-actions
-RUN  \
-    --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    # Keep downloaded APT packages in the docker build cache
-    rm -f /etc/apt/apt.conf.d/docker-clean && \
-    echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' >/etc/apt/apt.conf.d/keep-cache && \
-    # Do not start daemons after installation.
-    echo '#!/bin/sh\nexit 101' > /usr/sbin/policy-rc.d \
-    && chmod +x /usr/sbin/policy-rc.d \
-    # Install all required packages.
-    && apt-get -y update -qq \
-    && apt-get -y install \
-        locales \
-        -y cron \
-    && locale-gen en_US.UTF-8 \
-    && update-locale LANG=en_US.UTF-8 \
-    && apt-get -y install \
-        -o APT::Install-Recommends="false" \
-        -o APT::Install-Suggests="false" \
-        # Build tools from sources. \
-        build-essential \
-        osm2pgsql \
+# Install EPEL and other required repositories
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm && \
+    dnf config-manager --enable codeready-builder-for-rhel-9-x86_64-rpms || \
+    dnf config-manager --enable ubi-9-codeready-builder-rpms || \
+    dnf config-manager --enable ubi-9-codeready-builder || \
+    /usr/bin/crb enable || true
+
+# Update and install base packages
+RUN dnf -y update && \
+    dnf -y install --allowerasing \
+        # Build tools
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
         pkg-config \
-        libicu-dev \
-        python3-dev \
+        # Python and dependencies
+        python3 \
+        python3-devel \
         python3-pip \
-        python3-icu \
-        # PostgreSQL.
-        postgresql-postgis \
-        postgresql-postgis-scripts \
-        # Misc.
+        # Basic utilities
         curl \
         wget \
         sudo \
-        sshpass \
-        openssh-client
+        openssh-clients \
+        cronie \
+        which \
+        # Development libraries
+        expat-devel \
+        zlib-devel \
+        bzip2-devel \
+        proj-devel \
+        libicu \
+        libicu-devel \
+    && dnf clean all
 
+# Install PostgreSQL packages (without problematic dependencies first)
+RUN dnf -y install \
+        postgresql16 \
+        postgresql16-server \
+        postgresql16-contrib \
+    && dnf clean all
 
+# Try to install postgresql16-devel and its dependencies
+RUN dnf -y install perl-IPC-Run3 || \
+    dnf -y install perl-IPC-Run || \
+    dnf -y install perl || true && \
+    dnf -y install postgresql16-devel || true && \
+    dnf clean all
+
+# Install GDAL and PostGIS (handle missing qhull)
+RUN dnf -y install gdal310 gdal310-libs || \
+    dnf -y install gdal-libs gdal || true && \
+    dnf -y install qhull-devel || \
+    dnf -y install qhull || true && \
+    dnf -y install postgis34_16 || \
+    dnf -y install postgis || true && \
+    dnf -y install osm2pgsql || true && \
+    dnf clean all
+
+# Try to install optional packages
+RUN dnf -y install boost169-devel || dnf -y install boost-devel || true && \
+    dnf -y install protobuf-c-devel || dnf -y install protobuf-devel || true && \
+    dnf -y install lua-devel || dnf -y install lua53-devel || true && \
+    dnf clean all
+
+# Set up PostgreSQL paths for RHEL
+ENV PATH="/usr/pgsql-16/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/pgsql-16/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 ARG NOMINATIM_VERSION
 ARG USER_AGENT
 
-# Nominatim install.
-RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked pip install --break-system-packages \
-    nominatim-db\
-    osmium \
-    psycopg[binary] \
-    falcon \
-    uvicorn \
-    gunicorn \
-    nominatim-api
+# Nominatim install - using virtual environment for better isolation
+RUN python3 -m venv /opt/nominatim-venv && \
+    source /opt/nominatim-venv/bin/activate && \
+    pip install --upgrade pip && \
+    pip install \
+        nominatim-db \
+        osmium \
+        psycopg[binary] \
+        falcon \
+        uvicorn \
+        gunicorn \
+        nominatim-api
 
+# Set up virtual environment in PATH
+ENV PATH="/opt/nominatim-venv/bin:$PATH"
+ENV VIRTUAL_ENV="/opt/nominatim-venv"
 
-# remove build-only packages
-RUN true \
-    # Remove development and unused packages.
-    && apt-get -y remove --purge --auto-remove \
-        build-essential \
-    # Clear temporary files and directories.
-    && rm -rf \
-        /tmp/* \
-        /var/tmp/* \
-    && pip cache purge
+# Create nominatim user
+RUN useradd -m -s /bin/bash nominatim
 
-
+# Copy scripts
 COPY config.sh /app/config.sh
 COPY init.sh /app/init.sh
 COPY start.sh /app/start.sh
 COPY updater.sh /app/updater.sh
 
 # Make all shell scripts executable
-RUN chmod +x /app/start.sh
-RUN chmod +x /app/config.sh
-RUN chmod +x /app/init.sh
-RUN chmod +x /app/updater.sh
-# Collapse image to single layer.
+RUN chmod +x /app/*.sh
+
+# Create necessary directories
+RUN mkdir -p /nominatim && \
+    chown nominatim:nominatim /nominatim
+
+# Collapse image to single layer
 FROM scratch
 
 COPY --from=build / /
 
-# Please override this
-ENV NOMINATIM_PASSWORD=""
+# Environment variables
 ENV PGHOST=""
 ENV PGPORT=5432
 ENV PGDATABASE=""
@@ -99,26 +128,28 @@ ENV PGPASSWORD=""
 ENV PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
 ENV REPLICATION_URL=
 
-
 ENV PROJECT_DIR="/nominatim"
 ARG USER_AGENT
 ENV USER_AGENT=${USER_AGENT}
 ENV EFS_MOUNT_POINT=""
 ENV EFS_ENABLED="false"
 
-
-# important to set to avoid "could not open certificate file "/root/.postgresql/postgresql.crt": Permission denied" error
+# PostgreSQL SSL certificate path
 ENV PGSSLCERT=/tmp/postgresql.crt 
 
+# Add PostgreSQL and virtual environment to PATH
+ENV PATH="/usr/pgsql-16/bin:/opt/nominatim-venv/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/pgsql-16/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+ENV VIRTUAL_ENV="/opt/nominatim-venv"
 
-WORKDIR /app
+WORKDIR /${PROJECT_DIR}
 
 EXPOSE 5432
 EXPOSE 8080
 
 COPY conf.d/env $PROJECT_DIR/.env
 
-RUN echo "* * * * * /app/updater.sh >> /var/log/nominatim-cron.log 2>&1" | crontab -
-
+# Set up cron job
+RUN echo "* * * * * /app/updater.sh >> /var/log/nominatim-cron.log 2>&1" | crontab -u nominatim -
 
 CMD ["/app/start.sh"]

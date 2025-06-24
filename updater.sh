@@ -9,4 +9,4 @@ export PGDATABASE=nominatimdb
 export PGPORT=5432 
 export PGPASSWORD='Oussama0909!' 
 export PGSSLCERT=/tmp/postgresql.crt 
-sudo -E -u nominatim nominatim replication --catch-up --threads 15
+nominatim nominatim replication --catch-up --threads 15

@@ -1,11 +1,11 @@
-#!/bin/bash -x
+#!/bin/bash -e
 
 tailpid=0
 replicationpid=0
 GUNICORN_PID_FILE=/tmp/gunicorn.pid
 # send gunicorn logs straight to the console without buffering: https://stackoverflow.com/questions/59812009
 export PYTHONUNBUFFERED=1
-service cron start || true
+crond || true
 
 
 stopServices() {
@@ -101,11 +101,11 @@ mkdir -p ${PROJECT_DIR}/tokenizer
 chown -R nominatim:nominatim ${PROJECT_DIR}/tokenizer 2>/dev/null || true
 
 cd ${PROJECT_DIR}
-run_as_nominatim nominatim refresh --word-tokens || echo "Word token refresh failed, but continuing"
-run_as_nominatim nominatim refresh --word-counts || echo "Word count refresh failed, but continuing"
+nominatim refresh --word-tokens || echo "Word token refresh failed, but continuing"
+nominatim refresh --word-counts || echo "Word count refresh failed, but continuing"
 
 # Refresh functions
-cd ${PROJECT_DIR} && run_as_nominatim nominatim refresh --functions || echo "Function refresh failed, but continuing"
+cd ${PROJECT_DIR} && nominatim refresh --functions || echo "Function refresh failed, but continuing"
 
 # start continous replication process
 if [ "$REPLICATION_URL" != "" ] && [ "$FREEZE" != "true" ]; then
@@ -137,10 +137,10 @@ export NOMINATIM_QUERY_TIMEOUT=10
 export NOMINATIM_REQUEST_TIMEOUT=60
 if [ "$REVERSE_ONLY" = "true" ]; then
   echo "Warm database caches for reverse queries"
-  run_as_nominatim nominatim admin --warm --reverse-only > /dev/null || echo "Warming failed but continuing"
+  nominatim admin --warm --reverse-only > /dev/null || echo "Warming failed but continuing"
 else
   echo "Warm database caches for search and reverse queries"
-  run_as_nominatim nominatim admin --warm --search-only > /dev/null || echo "Warming failed but continuing"
+  nominatim admin --warm --search-only > /dev/null || echo "Warming failed but continuing"
 fi
 
 echo "Warming finished"
@@ -149,7 +149,7 @@ echo "--> Nominatim is ready to accept requests"
 
 # Start the Nominatim API server
 cd "$PROJECT_DIR"
-run_as_nominatim gunicorn \
+gunicorn \
   --bind :8080 \
   --pid $GUNICORN_PID_FILE \
   --daemon \
