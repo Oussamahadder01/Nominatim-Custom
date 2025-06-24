@@ -83,6 +83,7 @@ COPY updater.sh /app/updater.sh
 RUN chmod +x /app/start.sh
 RUN chmod +x /app/config.sh
 RUN chmod +x /app/init.sh
+RUN chmod +x /app/updater.sh
 # Collapse image to single layer.
 FROM scratch
 

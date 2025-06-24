@@ -27,11 +27,14 @@ DATA_DIR="${EFS_MOUNT_POINT}/nominatim/data"
 # Create EFS directories
 mkdir -p "$DOWNLOAD_DIR"
 mkdir -p "$DATA_DIR"
+mkdir -p "${EFS_MOUNT_POINT}/data"
 
 # Set ownership of EFS directories
 chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
 chmod -R 755 "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
 
+chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/data" 2>/dev/null || true
+chmod -R 755 "${EFS_MOUNT_POINT}/data" 2>/dev/null || true
 echo "Using EFS storage"
 
 
