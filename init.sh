@@ -24,10 +24,6 @@ if [ -z "$THREADS" ]; then
   THREADS=$(nproc)
 fi
 
-# Create nominatim user early if it doesn't exist
-if ! id nominatim >/dev/null 2>&1; then
-    useradd -m nominatim
-fi
 
 # Determine storage paths and download directly where needed
 DOWNLOAD_DIR="${EFS_MOUNT_POINT}/nominatim/downloads"
@@ -38,6 +34,8 @@ mkdir -p "$DOWNLOAD_DIR"
 mkdir -p "$DATA_DIR"
 mkdir -p "${EFS_MOUNT_POINT}/data"
 
+
+chown -R nominatim:nominatim ${PROJECT_DIR}
 # Set ownership of EFS directories
 chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
 chmod -R 755 "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true

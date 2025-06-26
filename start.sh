@@ -5,6 +5,10 @@ replicationpid=0
 GUNICORN_PID_FILE=/tmp/gunicorn.pid
 # send gunicorn logs straight to the console without buffering: https://stackoverflow.com/questions/59812009
 export PYTHONUNBUFFERED=1
+printenv > /nominatim_env
+printenv | sed 's/^\(.*\)$/export \1/g' > /nominatim_env.sh
+chmod 644 /nominatim_env /nominatim_env.sh
+mkdir -p /efs/logs/nominatim
 crond || true
 
 
@@ -31,21 +35,9 @@ if id nominatim >/dev/null 2>&1; then
   echo "user nominatim already exists"
 else
   useradd -m -p ${NOMINATIM_PASSWORD} nominatim
+  chown -R nominatim:nominatim ${PROJECT_DIR}
 fi
 
-
-# Function to run a command as nominatim or directly depending on what works
-run_as_nominatim() {
-  # First try with sudo from correct directory
-  if cd ${PROJECT_DIR} && sudo -E -u nominatim "$@" 2>/dev/null; then
-    return 0
-  else
-    echo "Warning: Failed to run command as nominatim user. Trying directly from correct directory..."
-    # Try running directly but from correct directory
-    cd ${PROJECT_DIR} && "$@"
-    return $?
-  fi
-}
 
 
 # Function to check if Nominatim database has been initialized properly
@@ -66,6 +58,11 @@ check_database_initialized() {
   fi
 }
 
+if [ "NOMINATIM_DESTROY" = "true" ]; then
+  echo "NOMINATIM_DESTROY is set to true, dropping the database..."
+  PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "DROP DATABASE IF EXISTS nominatim;"
+  echo "Database dropped. Will proceed with import."
+fi
 
 # First check if database exists and has been initialized
 DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='nominatim'" 2>/dev/null | grep -c 1 || echo "0")

@@ -40,6 +40,7 @@ RUN dnf -y update && \
         zlib-devel \
         bzip2-devel \
         proj-devel \
+        procps-ng \
         libicu \
         libicu-devel \
     && dnf clean all
@@ -81,7 +82,7 @@ ENV LD_LIBRARY_PATH="/usr/pgsql-16/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 ARG NOMINATIM_VERSION
 ARG USER_AGENT
 
-# Nominatim install - using virtual environment for better isolation
+# Nominatim install - using virtual environment
 RUN python3 -m venv /opt/nominatim-venv && \
     source /opt/nominatim-venv/bin/activate && \
     pip install --upgrade pip && \
@@ -98,9 +99,6 @@ RUN python3 -m venv /opt/nominatim-venv && \
 ENV PATH="/opt/nominatim-venv/bin:$PATH"
 ENV VIRTUAL_ENV="/opt/nominatim-venv"
 
-# Create nominatim user
-RUN useradd -m -s /bin/bash nominatim
-
 # Copy scripts
 COPY config.sh /app/config.sh
 COPY init.sh /app/init.sh
@@ -110,31 +108,17 @@ COPY updater.sh /app/updater.sh
 # Make all shell scripts executable
 RUN chmod +x /app/*.sh
 
-# Create necessary directories
-RUN mkdir -p /nominatim && \
-    chown nominatim:nominatim /nominatim
-
 # Collapse image to single layer
 FROM scratch
 
 COPY --from=build / /
 
-# Environment variables
-ENV PGHOST=""
-ENV PGPORT=5432
-ENV PGDATABASE=""
-ENV PGUSER=""
-ENV PGPASSWORD=""
-ENV PBF_URL=https://download.geofabrik.de/europe/monaco-latest.osm.pbf
-ENV REPLICATION_URL=
 
 ENV PROJECT_DIR="/nominatim"
 ARG USER_AGENT
 ENV USER_AGENT=${USER_AGENT}
-ENV EFS_MOUNT_POINT=""
-ENV EFS_ENABLED="false"
 
-# PostgreSQL SSL certificate path
+# PostgreSQL SSL certificate path to avoid errors with SSL connections
 ENV PGSSLCERT=/tmp/postgresql.crt 
 
 # Add PostgreSQL and virtual environment to PATH
@@ -150,6 +134,6 @@ EXPOSE 8080
 COPY conf.d/env $PROJECT_DIR/.env
 
 # Set up cron job
-RUN echo "* * * * * /app/updater.sh >> /var/log/nominatim-cron.log 2>&1" | crontab -u nominatim -
+RUN echo "* * * * * /app/updater.sh >> /efs/logs/nominatim/nominatim-cron.log 2>&1" | crontab - 
 
 CMD ["/app/start.sh"]
