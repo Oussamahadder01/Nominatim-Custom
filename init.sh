@@ -15,7 +15,7 @@ fi
 
 EFS_MOUNT_POINT="/efs"
 
-CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-with-body")
+CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-early")
 SCP='sshpass -p DMg5bmLPY7npHL2Q scp -o StrictHostKeyChecking=no u355874-sub1@u355874-sub1.your-storagebox.de'
 
 

@@ -51,7 +51,7 @@ check_database_initialized() {
         WHERE status='completed'
       )" 2>/dev/null | grep -q 't'; then
     echo "Database not initialized or missing required tables."
-    return 1
+    return 2
   else
   echo "Database already initialized with Nominatim tables."
   return 0
@@ -68,11 +68,14 @@ fi
 DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='nominatim'" 2>/dev/null | grep -c 1 || echo "0")
 SKIP_IMPORT=false
 
+
 if [ "$DB_EXISTS" -eq "1" ]; then
   echo "Database nominatim exists, checking if it's properly initialized..."
-  check_database_initialized
-  DB_INITIALIZED=$?
-  if [ "$DB_INITIALIZED" -eq 0 ]; then
+ if PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim -t -c "
+      SELECT EXISTS (
+        SELECT 1 FROM import_progress
+        WHERE status='completed'
+      )" 2>/dev/null | grep -q 't'; then
     echo "Database is properly initialized with Nominatim tables."
     SKIP_IMPORT=true
   else

@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# Source EFS setup
-source /app/efs-setup.sh
-
-# Setup EFS if available
-setup_efs
 
 CONFIG_FILE=${PROJECT_DIR}/.env
 
