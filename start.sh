@@ -1,36 +1,27 @@
 #!/bin/bash -e
 
-# Redirect all stdout and stderr to log files
-exec 1> >(tee -a /efs/logs/nominatim/start.log)
-exec 2> >(tee -a /efs/logs/nominatim/start_error.log)
-
 tailpid=0
 replicationpid=0
 GUNICORN_PID_FILE=/tmp/gunicorn.pid
 # send gunicorn logs straight to the console without buffering: https://stackoverflow.com/questions/59812009
 export PYTHONUNBUFFERED=1
 printenv > /nominatim_env
-printenv | sed 's/^\(.*\)$/export \1/g' > /nominatim_env.sh
+printenv | grep -v LS_COLORS | sed 's/^\(.*\)$/export \1/g' > /nominatim_env.sh
 chmod 644 /nominatim_env /nominatim_env.sh
-
-# Create log directory and set permissions
 mkdir -p /efs/logs/nominatim
-chmod 755 /efs/logs/nominatim
-
 service cron start || true
 
+
 stopServices() {
-  echo "$(date): Stopping services..." >> /efs/logs/nominatim/shutdown.log
   # Check if the replication process is active
   if [ $replicationpid -ne 0 ]; then
-    echo "$(date): Shutting down replication process" >> /efs/logs/nominatim/shutdown.log
+    echo "Shutting down replication process"
     kill $replicationpid
   fi
   if [ $tailpid -ne 0 ] && kill -0 $tailpid 2>/dev/null; then
     kill $tailpid
   fi
   if [ -f "$GUNICORN_PID_FILE" ]; then
-    echo "$(date): Shutting down Gunicorn" >> /efs/logs/nominatim/shutdown.log
     cat $GUNICORN_PID_FILE | xargs kill
   fi
 
@@ -46,6 +37,8 @@ else
   useradd -m -p ${NOMINATIM_PASSWORD} nominatim
   chown -R nominatim:nominatim ${PROJECT_DIR}
 fi
+
+
 
 # Function to check if Nominatim database has been initialized properly
 check_database_initialized() {
@@ -67,13 +60,14 @@ check_database_initialized() {
 
 if [ "NOMINATIM_DESTROY" = "true" ]; then
   echo "NOMINATIM_DESTROY is set to true, dropping the database..."
-  PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "DROP DATABASE IF EXISTS nominatim;" 2>> /efs/logs/nominatim/database.log
+  PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -c "DROP DATABASE IF EXISTS nominatim;"
   echo "Database dropped. Will proceed with import."
 fi
 
 # First check if database exists and has been initialized
-DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='nominatim'" 2>>/efs/logs/nominatim/database.log | grep -c 1 || echo "0")
+DB_EXISTS=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t -c "SELECT 1 FROM pg_database WHERE datname='nominatim'" 2>/dev/null | grep -c 1 || echo "0")
 SKIP_IMPORT=false
+
 
 if [ "$DB_EXISTS" -eq "1" ]; then
   echo "Database nominatim exists, checking if it's properly initialized..."
@@ -81,7 +75,7 @@ if [ "$DB_EXISTS" -eq "1" ]; then
       SELECT EXISTS (
         SELECT 1 FROM import_progress
         WHERE status='completed'
-      )" 2>>/efs/logs/nominatim/database.log | grep -q 't'; then
+      )" 2>/dev/null | grep -q 't'; then
     echo "Database is properly initialized with Nominatim tables."
     SKIP_IMPORT=true
   else
@@ -89,13 +83,13 @@ if [ "$DB_EXISTS" -eq "1" ]; then
   fi
 else
   echo "Database doesn't exist. Will proceed with import."
-  /app/config.sh >> /efs/logs/nominatim/config.log 2>&1
+  /app/config.sh
 fi
 
 # Only run the init.sh script if we're not skipping the import
 if [ "$SKIP_IMPORT" = "false" ]; then
     echo "Running full import with init.sh..."
-    /app/init.sh >> /efs/logs/nominatim/init.log 2>&1
+    /app/init.sh
   else
     echo "Will skip import but this may cause issues. Consider removing ${IMPORT_FINISHED} to force reimport."
     chown -R nominatim:nominatim ${PROJECT_DIR} 2>/dev/null || true
@@ -107,27 +101,27 @@ mkdir -p ${PROJECT_DIR}/tokenizer
 chown -R nominatim:nominatim ${PROJECT_DIR}/tokenizer 2>/dev/null || true
 
 cd ${PROJECT_DIR}
-nominatim refresh --word-tokens >> /efs/logs/nominatim/tokenizer.log 2>&1 || echo "Word token refresh failed, but continuing"
-nominatim refresh --word-counts >> /efs/logs/nominatim/tokenizer.log 2>&1 || echo "Word count refresh failed, but continuing"
+nominatim refresh --word-tokens || echo "Word token refresh failed, but continuing"
+nominatim refresh --word-counts || echo "Word count refresh failed, but continuing"
 
 # Refresh functions
-cd ${PROJECT_DIR} && nominatim refresh --functions >> /efs/logs/nominatim/functions.log 2>&1 || echo "Function refresh failed, but continuing"
+cd ${PROJECT_DIR} && nominatim refresh --functions || echo "Function refresh failed, but continuing"
 
 # start continous replication process
 if [ "$REPLICATION_URL" != "" ] && [ "$FREEZE" != "true" ]; then
   # run init in case replication settings changed
-  sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --init >> /efs/logs/nominatim/replication_init.log 2>&1
+  sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --init
   if [ "$UPDATE_MODE" == "continuous" ]; then
     echo "starting continuous replication"
-    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} &>> /efs/logs/nominatim/replication.log &
+    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} &> /var/log/replication.log &
     replicationpid=${!}
   elif [ "$UPDATE_MODE" == "once" ]; then
     echo "starting replication once"
-    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --once &>> /efs/logs/nominatim/replication.log &
+    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --once &> /var/log/replication.log &
     replicationpid=${!}
   elif [ "$UPDATE_MODE" == "catch-up" ]; then
     echo "starting replication once in catch-up mode"
-    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --catch-up &>> /efs/logs/nominatim/replication.log &
+    sudo -E -u nominatim nominatim replication --project-dir ${PROJECT_DIR} --catch-up &> /var/log/replication.log &
     replicationpid=${!}
   else
     echo "skipping replication"
@@ -143,10 +137,10 @@ export NOMINATIM_QUERY_TIMEOUT=10
 export NOMINATIM_REQUEST_TIMEOUT=60
 if [ "$REVERSE_ONLY" = "true" ]; then
   echo "Warm database caches for reverse queries"
-  nominatim admin --warm --reverse-only >> /efs/logs/nominatim/warming.log 2>&1 || echo "Warming failed but continuing"
+  nominatim admin --warm --reverse-only > /dev/null || echo "Warming failed but continuing"
 else
   echo "Warm database caches for search and reverse queries"
-  nominatim admin --warm --search-only >> /efs/logs/nominatim/warming.log 2>&1 || echo "Warming failed but continuing"
+  nominatim admin --warm --search-only > /dev/null || echo "Warming failed but continuing"
 fi
 
 echo "Warming finished"
@@ -162,10 +156,8 @@ gunicorn \
   --workers 4 \
   --enable-stdio-inheritance \
   --worker-class uvicorn.workers.UvicornWorker \
-  --access-logfile /efs/logs/nominatim/gunicorn_access.log \
-  --error-logfile /efs/logs/nominatim/gunicorn_error.log \
-  --log-level info \
   nominatim_api.server.falcon.server:run_wsgi
 
 # Keep the container running
+
 wait $tailpid || true

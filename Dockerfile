@@ -32,6 +32,6 @@ EXPOSE 8080
 COPY conf.d/env $PROJECT_DIR/.env
 
 # Set up cron job (using the existing nominatim user from base image)
-RUN echo "* * * * * /app/updater.sh >> /efs/nominatim/logs/nominatim-cron.log 2>&1" | crontab -
+RUN echo "* * * * * /app/updater.sh >> /efs/logs/nominatim/nominatim-cron.log 2>&1" | crontab -
 
 CMD ["/app/start.sh"]
