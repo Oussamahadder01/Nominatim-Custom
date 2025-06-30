@@ -5,12 +5,10 @@ EFS_MOUNT_POINT="/efs"
 CURL=("curl" "-L" "-A" "${USER_AGENT}" "--fail-early")
 SCP='sshpass -p DMg5bmLPY7npHL2Q scp -o StrictHostKeyChecking=no u355874-sub1@u355874-sub1.your-storagebox.de'
 
-
 # Check if THREADS is not set or is empty
 if [ -z "$THREADS" ]; then
   THREADS=$(nproc)
 fi
-
 
 # Determine storage paths and download directly where needed
 DOWNLOAD_DIR="${EFS_MOUNT_POINT}/nominatim/downloads"
@@ -21,7 +19,6 @@ mkdir -p "$DOWNLOAD_DIR"
 mkdir -p "$DATA_DIR"
 mkdir -p "${EFS_MOUNT_POINT}/data"
 
-
 chown -R nominatim:nominatim ${PROJECT_DIR}
 # Set ownership of EFS directories
 chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/nominatim" 2>/dev/null || true
@@ -31,18 +28,14 @@ chown -R nominatim:nominatim "${EFS_MOUNT_POINT}/data" 2>/dev/null || true
 chmod -R 755 "${EFS_MOUNT_POINT}/data" 2>/dev/null || true
 echo "Using EFS storage"
 
-
 # Create PROJECT_DIR and set ownership
 mkdir -p "${PROJECT_DIR}"
 chown -R nominatim:nominatim "${PROJECT_DIR}" 2>/dev/null || true
-
 
 IMPORT_GB_POSTCODES="true"
 IMPORT_WIKIPEDIA="true"
 IMPORT_US_POSTCODES="true"
 IMPORT_TIGER_ADDRESSES="true"
-
-
 
 # Download functions - NO SYMLINKS, direct downloads
 download_wikipedia() {
@@ -75,41 +68,37 @@ download_us_postcodes() {
     fi
 }
 
-#takes too much time to download and is not needed for most imports
-# download_tiger() {
-#     if [ "$IMPORT_TIGER_ADDRESSES" = "true" ]; then
-#         echo "Downloading Tiger addresses to PROJECT_DIR"
-#         ${SCP}:tiger2023-nominatim-preprocessed.csv.tar.gz ${PROJECT_DIR}/tiger-nominatim-preprocessed.csv.tar.gz
-#     else
-#         echo "Skipping optional Tiger addresses import"
-#     fi
-# }
-
 # Execute downloads
 download_wikipedia
 download_gb_postcodes
 download_us_postcodes
-# download_tiger
 
-
+# Check for existing OSM data before downloading
 TIMESTAMP=$(date +%Y%m%d)
-# Download OSM file
-if [ "$PBF_URL" != "" ]; then
-        # Download to EFS but also copy to PROJECT_DIR for Nominatim
-        OSMFILE="/efs/data/planet_${TIMESTAMP}.osm.pbf"
-        echo "Downloading OSM extract to EFS: $OSMFILE"
+
+# Check if there's already an OSM file in /efs/data
+if [ "$(ls -A ${EFS_MOUNT_POINT}/data/planet_*.osm.pbf 2>/dev/null | wc -l)" -gt 0 ]; then
+    # Use the most recent existing file
+    OSMFILE=$(ls -t ${EFS_MOUNT_POINT}/data/planet_*.osm.pbf 2>/dev/null | head -n 1)
+    echo "Found existing OSM file: $OSMFILE"
+else
+    # No existing file found, proceed with download
+    if [ "$PBF_URL" != "" ]; then
+        OSMFILE="${EFS_MOUNT_POINT}/data/planet_${TIMESTAMP}.osm.pbf"
+        echo "No existing OSM file found. Downloading to: $OSMFILE"
         "${CURL[@]}" "$PBF_URL" -C - --create-dirs -o $OSMFILE
         
         if [ $? -ne 0 ]; then
             echo "Failed to download OSM extract from $PBF_URL"
             exit 1
         fi
-elif [ "$PBF_PATH" != "" ]; then
-    echo "Using OSM extract from $PBF_PATH"
-    OSMFILE="$PBF_PATH"
-elif [ "$PBF_PATH" = "" ] && [ "$PBF_URL" = "" ]; then
-    echo "No PBF_PATH or PBF_URL provided, exiting."
-    exit 1
+    elif [ "$PBF_PATH" != "" ]; then
+        echo "Using OSM extract from $PBF_PATH"
+        OSMFILE="$PBF_PATH"
+    else
+        echo "No PBF_PATH or PBF_URL provided, and no existing file found."
+        exit 1
+    fi
 fi
 
 echo "Setting up database users..."
@@ -132,7 +121,6 @@ if ! PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d postgres -t
 else
     echo "User www-data already exists"
 fi
-
 
 skip_import=false
 # drop database nominatim if it exists and if import_progress table doens't exists and doesn't have "completed" status
@@ -172,7 +160,6 @@ fi
 #initialize replication table 
 nominatim replication --init --threads $THREADS
 
-
 PGPASSWORD=$PGPASSWORD psql -h $PGHOST -p $PGPORT -U $PGUSER -d nominatim << EOF
 CREATE TABLE IF NOT EXISTS import_progress (
     id SERIAL PRIMARY KEY,
@@ -184,11 +171,8 @@ INSERT INTO import_progress (status)
     ON CONFLICT DO NOTHING;
 EOF
 
-
-
 nominatim index --threads $THREADS
 nominatim admin --check-database
-
 
 export NOMINATIM_QUERY_TIMEOUT=10
 export NOMINATIM_REQUEST_TIMEOUT=60
